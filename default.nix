@@ -1,7 +1,7 @@
 { system ? builtins.currentSystem, configuration ? null
 , nixpkgs ? import <nixpkgs> { }, extraKernelConfigFile ? "config"
 , kernelSrcDir ? ./kernel, debianImage ? "debian-qemu-image.img"
-, debianImageSize ? "debian-qemu-image.img", debianRoot ? "debian-root"
+, debianImageSize ? "2G", debianRoot ? "debian-root"
 , rootPassword ? "pwFuerRoot", ... }@args:
 with nixpkgs.pkgs;
 let
@@ -29,8 +29,8 @@ let
       ${e2fsprogs}/bin/mkfs.ext2 "$debian_image"
     fi
     if ! ${utillinux}/bin/mountpoint -q "$mount_point"; then
-      sudo ${utillinux}/bin/mountpoint/mount -o loop "$debian_image" "$mount_point"
-      sudo ${debootstrap}/bin/debootstrap --arch amd64 buster "$mount_point"
+      sudo ${utillinux}/bin/mount -o loop "$debian_image" "$mount_point"
+      sudo ${debootstrap}/bin/debootstrap --arch amd64 unstable "$mount_point"
       sudo chroot debian-root /bin/bash -c 'echo hello world'
       echo "${rootPassword}\n${rootPassword}" | sudo chroot debian-root /bin/passwd root
       sudo ${utillinux}/bin/umount "$mount_point"
@@ -119,6 +119,8 @@ let
       kernelPackages = customKernel;
       kernelParams = [ "boot.shell_on_fail" "boot.trace" ];
     };
+
+    virtualisation = { graphics = false; };
 
     environment = {
       enableDebugInfo = true;
