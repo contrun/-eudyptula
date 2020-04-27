@@ -1,8 +1,20 @@
-{ system ? builtins.currentSystem, configuration ? null
-, nixpkgs ? import <nixpkgs> { }, extraKernelConfigFile ? "config"
-, kernelSrcDir ? ./kernel, debianImage ? "debian-qemu-image.img"
-, debianImageSize ? "2G", debianRoot ? "debian-root"
-, rootPassword ? "pwFuerRoot", ... }@args:
+let
+  overlays = [
+    (self: super: {
+      ccacheWrapper = super.ccacheWrapper.override {
+        extraConfig = ''
+          export CCACHE_COMPRESS=1
+          export CCACHE_DIR=/var/cache/ccache
+          export CCACHE_UMASK=007
+        '';
+      };
+    })
+  ];
+in { system ? builtins.currentSystem, configuration ? null
+, nixpkgs ? import <nixpkgs> { inherit overlays; }
+, extraKernelConfigFile ? "config", kernelSrcDir ? ./kernel
+, debianImage ? "debian-qemu-image.img", debianImageSize ? "2G"
+, debianRoot ? "debian-root", rootPassword ? "pwFuerRoot", ... }@args:
 with nixpkgs.pkgs;
 let
   currentDirectory = "${builtins.toPath ./.}";
@@ -84,17 +96,16 @@ let
         path = p;
       }}"
     ];
-    # in [ defaultConfigFile latestConfigFile ] ++ extraConfig;
-  in [ latestConfigFile ];
+  in [ latestConfigFile ] ++ extraConfig;
 
-  mergedConfigFile = (stdenv.mkDerivation {
+  mergedConfigFile = stdenv.mkDerivation {
     name = "merged-kernel-config";
     src = kernelSrc;
+    depsBuildBuild =
+      [ buildPackages.stdenv.cc buildPackages.bison buildPackages.flex ];
     phases = "unpackPhase prePatchPhase installPhase";
     prePatchPhase = linuxPackages_latest.kernel.prePatch;
     # make qemu happy with `CONFIG_EXPERIMENTAL=y`.
-    depsBuildBuild =
-      [ buildPackages.stdenv.cc buildPackages.bison buildPackages.flex ];
     installPhase = ''
       set -x
       KCONFIG_CONFIG=$out RUNMAKE=false "$src/scripts/kconfig/merge_config.sh" ${
@@ -102,21 +113,21 @@ let
       }
       grep -q '^CONFIG_EXPERIMENTAL=' $out && sed -i 's/^CONFIG_EXPERIMENTAL=.*/CONFIG_EXPERIMENTAL=y/' $out || echo 'CONFIG_EXPERIMENTAL=y' >> $out
     '';
-  }).overrideAttrs ({ prePatch ? "", ... }: {
-    prePatch = linuxPackages_latest.kernel.prePatch + prePatch;
-  });
-
-  customKernel = linuxPackages_custom {
-    src = kernelSrc;
-    version = kernelVersion;
-    configfile = "${mergedConfigFile}";
   };
+
+  myLinuxPackages = recurseIntoAttrs (linuxPackagesFor (pkgs.linuxManualConfig {
+    version = kernelVersion;
+    src = kernelSrc;
+    configfile = "${mergedConfigFile}";
+    stdenv = ccacheStdenv;
+    allowImportFromDerivation = true;
+  }));
 
   nixosConfiguration = { config, pkgs, ... }: {
     imports = [ ] ++ lib.optionals (configuration != null) [ configuration ];
 
     boot = {
-      kernelPackages = customKernel;
+      kernelPackages = myLinuxPackages;
       kernelParams = [ "boot.shell_on_fail" "boot.trace" ];
     };
 
@@ -156,5 +167,5 @@ let
   };
 in nixos // {
   inherit bootstrapDebian allConfigFiles defaultConfigFile latestConfigFile
-    mergedConfigFile customKernel kernelSrc;
+    mergedConfigFile myLinuxPackages kernelSrc;
 }
