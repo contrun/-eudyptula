@@ -120,8 +120,6 @@ let
       kernelParams = [ "boot.shell_on_fail" "boot.trace" ];
     };
 
-    virtualisation = { graphics = false; };
-
     environment = {
       enableDebugInfo = true;
       etc = let
