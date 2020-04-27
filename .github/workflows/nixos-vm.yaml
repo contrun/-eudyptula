@@ -6,28 +6,49 @@ jobs:
   build_nixos_vm_image:
     runs-on: ubuntu-latest
     steps:
+      - name: Prepare
+        id: preparation
+        run: |
+          echo "::set-output name=timestamp::$(date +"%Y-%m-%d-%H-%M-%S" -u)"
+
       - uses: actions/checkout@v2
         with:
           submodules: recursive
+
       - uses: cachix/install-nix-action@v8
+
       - run: |
+          set -x
+          sudo mkdir -p /var/cache/ccache
+          sudo chmod -R 777 /var/cache/ccache
+          sudo chown -R root:nixbld /var/cache/ccache
+
+      - uses: actions/cache@v1
+        with:
+          path: /var/cache/ccache
+          key: ${{ runner.os }}-ccache-${{ steps.preparation.outputs.timestamp }}
+          restore-keys: |
+            ${{ runner.os }}-ccache-
+
+      - run: |
+          nix-build . -A vm --option sandbox false
+          nix-store --export $(nix-store -qR result) | zstd -z -q -o nixos_qemu_vm.nar.zst
+
+          [[ -f /dev/kvm ]] || exit 0
+
           sudo apt update
           sudo apt install -y qemu
-          nix-build . -A vm
-          nix-store --export $(nix-store -qR result) | zstd -z -q -o nixos_qemu_vm.nar.zst
-          if ![[ -f /dev/kvm ]]; exit 0; fi
-
-          QEMU_OPTS=-nographic QEMU_NET_OPTS=hostfwd=tcp::2222-:22  ./result/bin/run-*-vm &
-          ssh-keyscan -p 2222 localhost >> ~/.ssh/known_hosts
+          QEMU_OPTS=-nographic QEMU_NET_OPTS=hostfwd=tcp::2222-:22 ./result/bin/run-*-vm &
 
           cat <<EOF > ssh-pw
           #!/usr/bin/env bash
           echo pwFuerRoot
           EOF
-
           cat <<EOF > ssh-test
           #!/usr/bin/env bash
+          set -xe
           export SSH_ASKPASS=$PWD/ssh-pw
+          ssh-keyscan -p 2222 localhost >> ~/.ssh/known_hosts
           setsid ssh -p 2222 root@localhost echo hello world
           EOF
           chmod +x ssh-*
