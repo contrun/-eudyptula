@@ -1,0 +1,48 @@
+name: "nixos build"
+on:
+  pull_request:
+  push:
+jobs:
+  build_nixos_vm_image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          submodules: recursive
+      - uses: cachix/install-nix-action@v8
+      - run: |
+          sudo apt update
+          sudo apt install -y qemu
+          nix-build . -A vm
+          nix-store --export $(nix-store -qR result) | zstd -z -q -o nixos_qemu_vm.nar.zst
+          if ![[ -f /dev/kvm ]]; exit 0; fi
+
+          QEMU_OPTS=-nographic QEMU_NET_OPTS=hostfwd=tcp::2222-:22  ./result/bin/run-*-vm &
+          ssh-keyscan -p 2222 localhost >> ~/.ssh/known_hosts
+
+          cat <<EOF > ssh-pw
+          #!/usr/bin/env bash
+          echo pwFuerRoot
+          EOF
+
+          cat <<EOF > ssh-test
+          #!/usr/bin/env bash
+          export SSH_ASKPASS=$PWD/ssh-pw
+          setsid ssh -p 2222 root@localhost echo hello world
+          EOF
+          chmod +x ssh-*
+
+          retries=10
+          until ./ssh-test; do
+            retries=$(($retries - 1))
+            if [[ $retries -eq 0 ]]; then
+              exit 1
+            fi
+            sleep 10
+          done
+          kill $(jobs -p)
+
+      - uses: actions/upload-artifact@v1
+        with:
+          name: nixos qemu vm closure
+          path: nixos_qemu_vm.nar.zst
